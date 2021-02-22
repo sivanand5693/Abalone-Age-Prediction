@@ -1,0 +1,344 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+## Goal
+
+The goal of this project is to develop a model to predict the age of abalone from physical measurements of the shell. The age of abalone here is obtained from the number of rings on the shell. So the response varibale of interest here is number of rings treated as a continuos value.
+
+
+Appropriate libraries
+```{r message=FALSE}
+library(dplyr)
+library(ggplot2)
+library(MASS)
+library(faraway)
+```
+
+Loading Dataset 
+```{r}
+abalone <- read.csv('abalone.csv',header = F)
+colnames(abalone) <- c('Sex','Length','Diameter','Height','Whole','Shucked','Viscera','Shell','Rings')
+```
+
+Converting sex to nominal factor
+```{r}
+abalone$Sex <- factor(abalone$Sex) 
+```
+
+## Initial Exploratory Data Analysis (EDA)
+
+#### Studying the response variable
+```{r}
+abalone %>% ggplot() + geom_histogram(aes(Rings), bins=15)
+
+abalone %>% ggplot() + geom_density(aes(Rings),fill='black')
+```
+
+The histogram and density plot of Rings show that it is reasonable to make a starting assumption that rings could be normally distributed. Therefore, I will treat Rings as a continuous variable and perform regression analysis. But it is important to note that this alone DOES NOT establish normality of the response variable. We need to evaluate the residual plots (QQ plots) of any model built.    
+
+#### Linear Correlation check
+
+There are 8 predictor variables of which Sex is Categorical with 3 levels. The remaining 7 are numerical variables. Below is the correlation matrix which shows the strength and direction of linear relationship between these variables. I have also included response Rings in this correlation check.
+```{r}
+cor(abalone[,2:9])
+```
+From the above table there seems to be a high correlation among many of the predictors.
+‘Length’ & ‘Diameter’ have .986 correlation (which is very high!).
+‘Whole’ & ‘Viscera’ have high correlation (>0.9) with many other predictors (and each other).
+From this we infer multicollinearity will definitely be an issue in any modelling, so might need to do variable selection.
+
+#### Scatterplots between continous predictors and response
+
+```{r}
+abalone %>% ggplot() +
+  geom_point(aes(x=Length,y=Rings)) 
+
+abalone %>% ggplot() +
+  geom_point(aes(x=Diameter,y=Rings))
+```
+
+Both these scatterplots looks same, so it is likely we need to include only Length or Diameter. There seems to be somewhat linear relationship here.
+
+```{r}
+abalone %>% ggplot() +
+  geom_point(aes(x=Height,y=Rings)) 
+
+abalone %>% ggplot() +
+  geom_point(aes(x=Whole,y=Rings)) 
+
+abalone %>% ggplot() +
+  geom_point(aes(x=Shucked,y=Rings)) 
+
+abalone %>% ggplot() +
+  geom_point(aes(x=Viscera,y=Rings)) 
+
+abalone %>% ggplot() +
+  geom_point(aes(x=Shell,y=Rings)) 
+```
+
+From all these plots I get the idea that some of the predictors might not contribute anything extra to a model.
+
+#### Boxplot of sex vs rings
+
+```{r}
+abalone %>% ggplot() +
+  geom_boxplot(aes(x=Sex,y=Rings))
+```
+
+Looks like F & M are similar, but infant category is different. We will come back to this point when looking at the models.
+
+## Train-Test Split
+
+```{r}
+set.seed(123)
+sample <- sample.int(n = nrow(abalone), size = floor(.7*nrow(abalone)), replace = F)
+abalone_train <- abalone[sample, ]
+abalone_test  <- abalone[-sample, ]
+```
+
+I am splitting the data into 70% training data vs 30% testing data. I will not use the testing data when fitting any model, only to evaluate the MSE. I have set the seed in R using “set.seed(123)” so that these results can be reproduced.
+
+## Initial Linear Model
+
+```{r}
+mod1 <- lm(Rings~.,data=abalone_train)
+anova(mod1)
+summary(mod1)
+```
+
+MSE on training data
+```{r}
+mean(mod1$residuals^2)
+```
+
+MSE on testing data
+```{r}
+mod1_predict <- predict(mod1,newdata = abalone_test)
+(sum((mod1_predict - abalone_test$Rings)^2))/length(mod1_predict)
+```
+
+The initial linear model contains all the predictors. The model gives a training MSE = 4.765 and a test MSE = 5.2345. This seems like a good performance but let’s make sure to check the model diagnostics before saying that this is a good model or making inferences about the beta estimates.
+
+## Model Diagnostics
+
+#### Checking for multicollinearity using Variance Inflation Factor (VIF)
+```{r}
+vif(mod1)
+```
+
+Usually, a VIF value > 10 indicates multicollinearity could be an issue. Almost all the numerical predictors have VIF>10. This confirms what we suspected earlier from scatterplots and correlation matrix. Multicollinearity is definitely an issue!
+
+#### Checking normality assumption using QQplot of residuals:
+```{r}
+plot(mod1,which = 2)
+```
+
+Very big deviation for larger values of residuals. This is serious violation of the assumption that the response variable is normally distributed. This can be possibly be corrected with appropriate transformations. We will come back to this later.
+
+#### Checking for constant variance of error terms:
+```{r}
+plot(mod1,which = 1)
+plot(mod1,which = 3)
+```
+
+This could also be an issue; we will keep monitoring this for successive models to see whether it improves.  
+
+So, we see that in spite of low MSE, there are serious violation of linear model assumptions. Therefore, we CANNOT use this model or interpret anything from this model.
+
+
+## Tackling the issue of multicollinearity using backward elimination
+```{r}
+drop1(mod1,test="F")
+
+mod2 <- lm(Rings~.-Length,data=abalone_train)
+vif(mod2)
+
+drop1(mod2,test = "F")
+
+mod3 <- lm(Rings~.-Length-Whole,data=abalone_train)
+vif(mod3) 
+
+mod4 <- lm(Rings~.-Length-Whole-Viscera,data=abalone_train)
+vif(mod4)
+```
+
+Using General F test I first drop ‘Length’. Then I check VIF and see that multicollinearity is still an issue. I drop ‘Whole’ next and then ‘Viscera’ on next iteration each time checking if VIF > 10 for any predictor.
+Finally, I get a model in which VIF condition is not violated. This is “mod4” in my code.
+
+## Tackling the issue of normality using Box-Cox procedure
+
+I used boxcox procedure to check which possible transformation will result in highest log likelihood.
+The boxcox transformation is
+y^lambda = b0 + b1x1 + b2x2 + …. (for lambda not = 0)
+Log(y) = b0 + b1x1 + b2x2 + …. (for lambda = 0)
+The plot seen below:
+```{r}
+boxcox(mod4,data=abalone_train)
+```
+
+Lambda=0 (very close to zero) maximizes the log likelihood. Therefore, logarithmic transformation is appropriate.
+
+## Modelling Log(Rings)
+```{r}
+abalone_train$logrings <- log(abalone_train$Rings)
+
+mod4log <- lm(logrings~Sex+Diameter+Height+Shucked+Shell,data=abalone_train)
+```
+
+Checking the residaul diagnostics:
+```{r}
+plot(mod4log,which = 2)
+```
+
+QQ plot looks much better!! There may be few smaller values which are outliers, but overall this looks relatively normal.
+
+```{r}
+plot(mod4log,which = 1)
+plot(mod4log,which = 3)
+```
+
+The constant variance assumption looks alright. Maybe it could be improved little, but overall its seem okay.  
+
+Now that the assumptions are validated, lets take a closer look at the fitted model:
+```{r}
+summary(mod4log)
+```
+
+SexM has high p-value, therefore it is not significantly different that SexF (which is used for base comparison by R). This means that the association of SexF & SexM on response variable logrings is relatively same.
+All other predictors have a significant p-value and thus do have a significant association with the response variable. The fitted model using the above beta estimates is:
+(For eg. The beta estimates can be interpreted as follows: one unit increase in Diameter will correspond to a 1.799 increase in logrings.)
+
+Logrings = 1.279 + SexI*(-0.0819) + Diameter*(1.799) + Height*(2.853)
++ Schuked*(-1.1339) + Shell*(1.098)  
+
+SexI is an indicator variable that takes value 1, when the observation is Infant. The model reduces to:  
+
+Logrings = 1.1971 + Diameter*(1.799) + Height*(2.853) + Schuked*(-1.1339) + Shell*(1.098)  
+
+So, we see that the effect of logrings reduces by 0.0819 for infants. Please note is in log scale, the actual effect on response “Rings” can be calculated by transforming back.  
+
+Similarly, when the observation is Female or Male, SexI=0 and (EQ 1) reduces to:  
+
+Logrings = 1.279 + Diameter*(1.799) + Height*(2.853) + Schuked*(-1.1339) + Shell*(1.098)    
+
+#### MSE on training data
+```{r}
+mean(mod4log$residuals^2)
+```
+
+#### MSE on testing data
+```{r}
+abalone_test$logrings <- log(abalone_test$Rings)
+mod4log_predict <- predict(mod4log,newdata = abalone_test)
+
+(sum((mod4log_predict - abalone_test$logrings)^2))/length(mod4log_predict)
+```
+
+Training MSE = 0.04133
+Test MSE = 0.04744
+Although these are lower due to it being on log scale, it is quite a low error rate and since the model residual diagnostics are fine it is a good model.
+
+## Alternative Approach: PCA Regression
+
+Another idea I had is to use PCA since we have many highly correlated predictors. I will form PC’s and treat them as my new predictors.  
+
+I am running PCA on correlation matrix of the numerical predictors. The reason to use correlation instead of covariance matrix is that these predictors are not all on the same scale.  
+
+Once I perform eigen decomposition of correlation matrix, I plot the relative energy of each eigenvalue using scree plot.
+```{r}
+continous_predictors <- abalone_train[,2:8]
+
+cor_matrix <- cor(continous_predictors)
+
+eigen(cor_matrix)
+aba_lambda <- eigen(cor_matrix)$values
+aba_eigenvectors <- eigen(cor_matrix)$vectors
+aba_relenergy <- aba_lambda/sum(aba_lambda)
+plot(aba_relenergy,type="b")
+
+sum(aba_lambda[1:2])/sum(aba_lambda)
+```
+
+The relative energies are listed below:
+```{r}
+aba_relenergy
+```
+
+Though the 1st eigenvector contributes 92.3% of total variance, I will use the first 2 eigenvalues. This contributes 95.4% of total variance.  
+
+Next, we project the numeric predictors into 2D space using the first 2 eigenvectors.  
+
+```{r}
+continous_projected <- as.data.frame(as.matrix(continous_predictors) %*% aba_eigenvectors[,1:2])
+colnames(continous_projected) <- c('PC1','PC2')
+
+abalone_train_PC <- cbind(abalone_train[,c(1,9,10)],continous_projected)
+```
+
+## Regression of logrings with sex, PC1, PC2
+```{r}
+modpc1 <- lm(logrings~Sex+PC1+PC2,data=abalone_train_PC)
+```
+
+Looking at the residual plots:
+```{r}
+plot(modpc1, which = 2)
+```
+
+QQ plot looks good. Very few values deviate from the dotted line.
+
+```{r}
+plot(modpc1, which = 1)
+plot(modpc1, which = 3)
+```
+
+Constant variance assumption is validated.  
+
+Taking a closer look at the fitted model:
+```{r}
+summary(modpc1)
+```
+
+SexM has high p-value, therefore it is not significantly different that SexF (which is used for base comparison by R). This means that the association of SexF & SexM on response variable logrings is relatively same. This is same result as before.  
+
+The fitted model using the above beta estimates is:  
+
+Logrings = 1.0729 + SexI*(-0.10126) + PC1*(-1.43979) + PC2*(2.2362)  
+
+SexI is an indicator variable that takes value 1, when the observation is Infant. The model reduces to:  
+
+Logrings = 0.97164 + + PC1*(-1.43979) + PC2*(2.2362)  
+
+So, we see that the effect of logrings reduces by 0.10126 for infants. Please note is in log scale, the actual effect on response “Rings” can be calculated by transforming back.  
+
+Similarly, when the observation is Female or Male, SexI=0 and (EQ 2) reduces to:  
+
+Logrings = 1.0729 + PC1*(-1.43979) + PC2*(2.2362)  
+
+#### MSE on training data
+```{r}
+mean(modpc1$residuals^2)
+```
+
+#### MSE on testing data
+```{r}
+continousTEST_projected <- as.data.frame(as.matrix(abalone_test[,2:8]) %*% aba_eigenvectors[,1:2])
+colnames(continousTEST_projected) <- c('PC1','PC2')
+
+abalone_test_PC <- cbind(abalone_test[,c(1,9,10)],continousTEST_projected)
+
+modpc1_predict <- predict(modpc1,newdata = abalone_test_PC)
+(sum((modpc1_predict - abalone_test$logrings)^2))/length(modpc1_predict)
+```
+
+Training MSE = 0.04605
+Test MSE = 0.048267
+These are also low! (on log scale). It is slightly higher than mod4log but not much different.
+
+## Result
+
+Important thing to note when using PCA regression is that it is difficult to interpret the PC’s as they are linear combinations of many variables that doesn’t have physical meaning by combing. (eg. Height + Weight doesn’t have any practical meaning). If the client’s goal is purely prediction and he is not
+interested in understanding the relationship between predictors and response I would recommend the PCA model as I am not discarding any predictor variables, and by using just 2 PC’s I account for 95.4% of total variance.
+However, if the client is interested in understanding the relationship between predictors and response in addition to prediction, then I would recommend the previous model (mod4log).
