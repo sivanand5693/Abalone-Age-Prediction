@@ -1,8 +1,3 @@
----
-output:
-  word_document: default
-  html_document: default
----
 ## Goal
 
 The goal of this project is to develop a model to predict the age of abalone from physical measurements of the shell. The age of abalone here is obtained from the number of rings on the shell. So the response varibale of interest here is number of rings treated as a continuos value.
